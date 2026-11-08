@@ -34,7 +34,7 @@ While a zone is active (up to 8 weeks after the last zone week), a label prints 
 *The full sequence at the April 2025 low. The score jumps past 75 (orange columns), the amber zone opens with a red dot, and the next reversal week prints a green **BOTTOM**. The dashed line marks the zone low, which is the level where the setup fails.*
 
 ### Step 4 — Grade it: green vs grey "?"
-A **green BOTTOM** needs all five checks to pass. The table's *Context* cell shows them as `mkt rs hi ma`:
+A **green BOTTOM** needs every check to pass. The table's *Context* cell shows "all ✓" or lists the failing ones (`mkt rs hi ma dd vol`):
 
 | Check | Code | Why (from the backtest) |
 |---|---|---|
@@ -98,13 +98,13 @@ To hide the stats table entirely, untick **Show table** (first setting on the In
 ## Files
 | File | What it is |
 |---|---|
-| `bottom_radar.pine` | The indicator (v2.1) |
+| `bottom_radar.pine` | The indicator (v2.4) |
 | `versions/bottom_radar_v2.0.pine` | Previous version, before the 100-chart learnings |
 | `BACKTEST_REPORT.md` | Every test set, the errors found, what changed, and the results |
 | `docs/img/` | Screenshots used in this README |
 
 ## Disclaimer
-Educational tool, not financial advice. The results are historical tendencies measured on weekly charts. Even green signals fail about 1 time in 5. Always use the invalidation level and your own risk management.
+Educational tool, not financial advice. The results are historical tendencies measured on weekly charts. Even green signals fail about 1 time in 6. Always use the invalidation level and your own risk management.
 
 ## License
 MIT. See [LICENSE](LICENSE).
