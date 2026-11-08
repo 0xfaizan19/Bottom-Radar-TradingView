@@ -33,6 +33,7 @@ type Stats
 
 // ───────────────────────────── INPUTS ─────────────────────────────
 bool  showTable = input.bool(true, "Show table", display = display.none, tooltip = "Untick to hide the whole table.")
+bool  markPrice = input.bool(false, "Also mark the price chart", display = display.none, tooltip = "Off = everything stays in this indicator's own pane, like RSI. On = also draws zone shading, dots and invalidation lines on the candles.")
 string G1 = "① Signal engine"
 int    zoneTh   = input.int(60, "Bottom zone · score ≥", minval = 20, maxval = 95, group = G1, display = display.none, tooltip = "Composite capitulation score (0-100) that opens a major BOTTOMING ZONE (amber shading).")
 int    warnTh   = input.int(75, "Extreme capitulation · score ≥", minval = 30, maxval = 99, group = G1, display = display.none, tooltip = "A dot marks the week a bottoming zone opens; it turns orange-red when the score clears this line.")
@@ -82,7 +83,7 @@ bool   showDipQ  = input.bool(true, "DIP? labels (grey)", group = G4, display = 
 bool   showWarn  = input.bool(true, "Zone-open dots", group = G4, display = display.none)
 bool   showZone  = input.bool(true, "Zone shading", group = G4, display = display.none)
 bool   showLevel = input.bool(true, "Invalidation line", group = G4, display = display.none)
-string labelMode = input.string("Bottom of chart", "Label position", options = ["Bottom of chart", "Below candles"], group = G4, display = display.none, tooltip = "Bottom of chart = labels pinned to the bottom edge of the price chart so they never cover candles. Below candles = under each bar, with a hover tooltip.")
+string labelMode = input.string("In this pane", "Label position", options = ["In this pane", "Bottom of price chart", "Below candles"], group = G4, display = display.none, tooltip = "In this pane = labels sit in the indicator's own pane (like RSI), nothing on the candles. Bottom of price chart = pinned to the bottom edge of the price chart. Below candles = under each bar, with a hover tooltip.")
 float  labelGap  = input.float(15.0, "Below candles: distance under the low (%)", minval = 0.0, maxval = 60.0, step = 1.0, group = G4, display = display.none, tooltip = "Moves BOTTOM / DIP labels further under the candles so they don't cover the chart. 0 = right under the bar.")
 string tblPos    = input.string("Top right", "Table position", options = ["Top right", "Middle right", "Bottom right", "Top left", "Bottom left"], group = G4, display = display.none)
 string tblTxt    = input.string("Small", "Table text", options = ["Tiny", "Small", "Normal"], group = G4, display = display.none)
@@ -416,7 +417,7 @@ if fire
     bool show = sigCls == 1 ? showMajor : sigCls == 3 ? showMajQ : sigCls == 2 ? showDip : showDipQ
     if show and labelMode == "Below candles"
         label.new(bar_index, low * (1.0 - labelGap / 100.0), (isBot ? "BOTTOM" : "DIP") + (risky ? "?" : ""), xloc = xloc.bar_index, yloc = yloc.price, color = tc, style = label.style_label_up, textcolor = color.white, size = isBot and not risky ? size.normal : size.small, tooltip = tip, force_overlay = true)
-    if showLevel and show
+    if showLevel and show and markPrice
         if not na(invLn)
             line.set_extend(invLn, extend.none)
             line.set_x2(invLn, bar_index)
@@ -523,8 +524,12 @@ hWarn = hline(warnTh, "Extreme line", color = color.new(cHot, 35), linestyle = h
 hZone = hline(zoneTh, "Zone line", color = color.new(cZone, 25), linestyle = hline.style_dashed)
 hDip  = hline(dipTh, "Dip line", color = color.new(cDip, 45), linestyle = hline.style_dotted)
 fill(hZone, hTop, color = color.new(cZone, 94), title = "Zone band")
-plotshape(sigBot or sigBotQ, "BOTTOM marker", shape.triangleup, location.bottom, color = sigBot ? cBot : cRisk, size = size.tiny)
-plotshape(sigDip or sigDipQ, "DIP marker", shape.triangleup, location.bottom, color = sigDip ? cDip : cRisk, size = size.tiny)
+bool inPane = labelMode == "In this pane"
+bgcolor(showZone and majorZone ? color.new(cZone, 85) : showZone and dipZone ? color.new(cDip, 90) : na, title = "Zone shading (pane)")
+plotshape(inPane and showMajor and sigBot, "BOTTOM tag", shape.labeldown, location.top, color = cBot, text = "BOTTOM", textcolor = color.white, size = size.small, display = display.pane)
+plotshape(inPane and showMajQ and sigBotQ, "BOTTOM? tag", shape.labeldown, location.top, color = cRisk, text = "BOTTOM?", textcolor = color.white, size = size.small, display = display.pane)
+plotshape(inPane and showDip and sigDip, "DIP tag", shape.labeldown, location.top, color = cDip, text = "DIP", textcolor = color.white, size = size.small, display = display.pane)
+plotshape(inPane and showDipQ and sigDipQ, "DIP? tag", shape.labeldown, location.top, color = cRisk, text = "DIP?", textcolor = color.white, size = size.small, display = display.pane)
 plot(nz(sRsi) * 100, "Evidence · RSI", display = display.data_window)
 plot(nz(sFear) * 100, "Evidence · Fear", display = display.data_window)
 plot(nz(sStr) * 100, "Evidence · Stretch", display = display.data_window)
@@ -534,13 +539,13 @@ plot(nz(sExh) * 100, "Evidence · Exhaustion", display = display.data_window)
 plot(mktOK ? 1 : 0, "Context · market OK", display = display.data_window)
 
 // ───────────────────────────── VISUALS · PRICE CHART ─────────────────────────────
-bool atEdge = labelMode == "Bottom of chart"
+bool atEdge = labelMode == "Bottom of price chart"
 plotshape(atEdge and showMajor and sigBot, "BOTTOM label", shape.labelup, location.bottom, color = cBot, text = "BOTTOM", textcolor = color.white, size = size.small, display = display.pane, force_overlay = true)
 plotshape(atEdge and showMajQ and sigBotQ, "BOTTOM? label", shape.labelup, location.bottom, color = cRisk, text = "BOTTOM?", textcolor = color.white, size = size.small, display = display.pane, force_overlay = true)
 plotshape(atEdge and showDip and sigDip, "DIP label", shape.labelup, location.bottom, color = cDip, text = "DIP", textcolor = color.white, size = size.small, display = display.pane, force_overlay = true)
 plotshape(atEdge and showDipQ and sigDipQ, "DIP? label", shape.labelup, location.bottom, color = cRisk, text = "DIP?", textcolor = color.white, size = size.small, display = display.pane, force_overlay = true)
-bgcolor(showZone and majorZone ? color.new(cZone, 80) : showZone and dipZone ? color.new(cDip, 87) : na, title = "Zone shading", force_overlay = true)
-plotshape(showWarn and (majOpen or warnX), "Zone dot", shape.circle, location.belowbar, color = score >= warnTh ? cHot : cZone, size = size.tiny, force_overlay = true)
+bgcolor(markPrice and showZone and majorZone ? color.new(cZone, 80) : markPrice and showZone and dipZone ? color.new(cDip, 87) : na, title = "Zone shading", force_overlay = true)
+plotshape(markPrice and showWarn and (majOpen or warnX), "Zone dot", shape.circle, location.belowbar, color = score >= warnTh ? cHot : cZone, size = size.tiny, force_overlay = true)
 
 // ───────────────────────────── DASHBOARD ─────────────────────────────
 f_pos(string p) =>
