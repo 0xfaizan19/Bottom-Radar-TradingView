@@ -83,7 +83,7 @@ bool   showDipQ  = input.bool(true, "DIP? labels (grey)", group = G4, display = 
 bool   showWarn  = input.bool(true, "Zone-open dots", group = G4, display = display.none)
 bool   showZone  = input.bool(true, "Zone shading", group = G4, display = display.none)
 bool   showLevel = input.bool(true, "Invalidation line", group = G4, display = display.none)
-string labelMode = input.string("In this pane", "Label position", options = ["In this pane", "Bottom of price chart", "Below candles"], group = G4, display = display.none, tooltip = "In this pane = labels sit in the indicator's own pane (like RSI), nothing on the candles. Bottom of price chart = pinned to the bottom edge of the price chart. Below candles = under each bar, with a hover tooltip.")
+string labelMode = input.string("Bottom of price chart", "Label position", options = ["Bottom of price chart", "In this pane", "Below candles"], group = G4, display = display.none, tooltip = "In this pane = labels sit in the indicator's own pane (like RSI), nothing on the candles. Bottom of price chart = pinned to the bottom edge of the price chart. Below candles = under each bar, with a hover tooltip.")
 float  labelGap  = input.float(15.0, "Below candles: distance under the low (%)", minval = 0.0, maxval = 60.0, step = 1.0, group = G4, display = display.none, tooltip = "Moves BOTTOM / DIP labels further under the candles so they don't cover the chart. 0 = right under the bar.")
 string tblPos    = input.string("Top right", "Table position", options = ["Top right", "Middle right", "Bottom right", "Top left", "Bottom left"], group = G4, display = display.none)
 string tblTxt    = input.string("Small", "Table text", options = ["Tiny", "Small", "Normal"], group = G4, display = display.none)
