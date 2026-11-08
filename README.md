@@ -82,7 +82,7 @@ The rules were designed on 50 charts, checked on 20 held-back stocks, then teste
 3. Click **Add to chart** and switch the chart to the **weekly (1W)** timeframe.
 4. Optional: create an alert on **"BOTTOM confirmed (green)"**. It fires at the weekly close.
 
-Settings are grouped as **Signal engine**, **Grade**, **Evidence**, **Backtest table** and **Style**. The market index for the context check defaults to `AMEX:SPY`.
+To hide the stats table entirely, untick **Backtest table → Show table**. Settings are grouped as **Signal engine**, **Grade**, **Evidence**, **Backtest table** and **Style**. The market index for the context check defaults to `AMEX:SPY`.
 
 ## Files
 | File | What it is |

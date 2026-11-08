@@ -63,6 +63,7 @@ int sigLen   = input.int(156, "Volatility baseline (weeks)", minval = 26, group 
 int trendLen = input.int(40, "Uptrend average (weeks)", minval = 10, group = G2, display = display.none)
 
 string G3 = "④ Backtest table"
+bool  showTable = input.bool(true, "Show table", group = G3, display = display.none, tooltip = "Untick to hide the whole table.")
 bool  showStats = input.bool(true, "Show backtest rows", group = G3, display = display.none)
 bool  showEvid  = input.bool(true, "Show evidence rows", group = G3, display = display.none)
 int   horizon   = input.int(52, "Judge 'at a real low' after (weeks)", minval = 26, maxval = 156, group = G3, display = display.none)
@@ -692,6 +693,9 @@ if barstate.islast
         stRow(r + 6, "Real lows caught", majLows > 0 ? str.tostring(majHitsG) + "/" + str.tostring(majLows) + " major" : "—", TXT, majLows > 0 ? str.tostring(majHitsA) + "/" + str.tostring(majLows) + " w/ grey" : "—", TXT, swLows > 0 ? str.tostring(swHits) + "/" + str.tostring(swLows) + " all" : "—", TXT, "—", "BOTTOM: major lows (swing ≥ max(" + str.tostring(majMin, "#") + "%, " + str.tostring(majSig, "#.#") + "σ)) with a green BOTTOM in the hit window. BOTTOM?: counting grey ones too. DIP: every swing low with any signal in the hit window.")
         stRow(r + 7, "Higher 26w later", fRate(stB.up26, stB.n26), better(upRate(stB), upRate(nvB), true), fRate(stBq.up26, stBq.n26), better(upRate(stBq), upRate(nvB), true), fRate(stD.up26, stD.n26), better(upRate(stD), upRate(nvD), true), fRate(nvB.up26, nvB.n26), "Share of entries that were higher 26 weeks later.")
         stRow(r + 8, "Avg return 26w", fPct(avgRet(stB), true), better(avgRet(stB), avgRet(nvB), true), fPct(avgRet(stBq), true), better(avgRet(stBq), avgRet(nvB), true), fPct(avgRet(stD), true), better(avgRet(stD), avgRet(nvD), true), fPct(avgRet(nvB), true), "Average close-to-close return 26 weeks after entry.")
+
+if barstate.islast and not showTable
+    table.clear(tb, 0, 0, 7, 13)
 
 // ───────────────────────────── ALERTS ─────────────────────────────
 alertcondition(sigBot, "BOTTOM confirmed (green)", "Bottom Radar: weekly BOTTOM confirmed on {{exchange}}:{{ticker}} at {{close}}")
