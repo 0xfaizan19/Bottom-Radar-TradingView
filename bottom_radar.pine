@@ -32,6 +32,7 @@ type Stats
     array<float> drop
 
 // ───────────────────────────── INPUTS ─────────────────────────────
+bool  showTable = input.bool(true, "Show table", display = display.none, tooltip = "Untick to hide the whole table.")
 string G1 = "① Signal engine"
 int    zoneTh   = input.int(60, "Bottom zone · score ≥", minval = 20, maxval = 95, group = G1, display = display.none, tooltip = "Composite capitulation score (0-100) that opens a major BOTTOMING ZONE (amber shading).")
 int    warnTh   = input.int(75, "Extreme capitulation · score ≥", minval = 30, maxval = 99, group = G1, display = display.none, tooltip = "A dot marks the week a bottoming zone opens; it turns orange-red when the score clears this line.")
@@ -63,7 +64,6 @@ int sigLen   = input.int(156, "Volatility baseline (weeks)", minval = 26, group 
 int trendLen = input.int(40, "Uptrend average (weeks)", minval = 10, group = G2, display = display.none)
 
 string G3 = "④ Backtest table"
-bool  showTable = input.bool(true, "Show table", group = G3, display = display.none, tooltip = "Untick to hide the whole table.")
 bool  showStats = input.bool(true, "Show backtest rows", group = G3, display = display.none)
 bool  showEvid  = input.bool(true, "Show evidence rows", group = G3, display = display.none)
 int   horizon   = input.int(52, "Judge 'at a real low' after (weeks)", minval = 26, maxval = 156, group = G3, display = display.none)
