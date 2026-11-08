@@ -1,0 +1,733 @@
+//@version=6
+// ╔════════════════════════════════════════════════════════════════════════╗
+// ║  BOTTOM RADAR v2.1 · Weekly capitulation & reversal finder             ║
+// ║  Stage 1  ZONE     composite capitulation score (0-100) crosses a line ║
+// ║  Stage 2  CONFIRM  reversal week / RSI hook prints BOTTOM or DIP       ║
+// ║  Grade    green = market + stock context OK, grey "?" = risky context  ║
+// ║  v2 learnings (50-chart test + 20-stock holdout):                      ║
+// ║   · bottoms fail mostly in market-wide downtrends (2001-02, 2008, 2022)║
+// ║   · stocks far below their old highs keep falling; crashes from near   ║
+// ║     the highs recover · RSI divergence marked long bear markets, not   ║
+// ║     bottoms (removed) · good dips happen near the highs / 40w average  ║
+// ║  v2.1 (100 new charts): stocks crashing far harder than the market or  ║
+// ║     sitting >20% under their 40w average kept falling -> graded grey   ║
+// ║  Signals use closed weekly bars only, so they do not repaint.          ║
+// ╚════════════════════════════════════════════════════════════════════════╝
+indicator("Bottom Radar · Weekly", shorttitle = "Bottom Radar", overlay = false, precision = 0, max_labels_count = 500, max_lines_count = 500, max_bars_back = 500)
+
+// ───────────────────────────── TYPES ─────────────────────────────
+type Sig
+    int   bi
+    int   cls
+    float entry
+    float preLow
+    float minLow
+
+type Stats
+    int          n    = 0
+    float        r26  = 0.0
+    int          n26  = 0
+    int          up26 = 0
+    array<float> dist
+    array<float> drop
+
+// ───────────────────────────── INPUTS ─────────────────────────────
+string G1 = "① Signal engine"
+int    zoneTh   = input.int(60, "Bottom zone · score ≥", minval = 20, maxval = 95, group = G1, display = display.none, tooltip = "Composite capitulation score (0-100) that opens a major BOTTOMING ZONE (amber shading).")
+int    warnTh   = input.int(75, "Extreme capitulation · score ≥", minval = 30, maxval = 99, group = G1, display = display.none, tooltip = "A dot marks the week a bottoming zone opens; it turns orange-red when the score clears this line.")
+int    dipTh    = input.int(30, "Dip zone · score ≥", minval = 5, maxval = 90, group = G1, display = display.none, tooltip = "Lower score that opens a DIP ZONE (blue shading). Also needs a pullback of at least max(10%, 0.5σ) from the 52-week high.")
+bool   dipTrend = input.bool(true, "Dips only in uptrends", group = G1, display = display.none, tooltip = "Uptrend = 40-week average rising, and price above the 100-week average unless the pullback is still shallower than a major drop.")
+float  dipAth   = input.float(35.0, "Dip must be within % of all-time high", minval = 5, maxval = 90, group = G1, display = display.none, tooltip = "v2: dips deeper than this below the all-time high behaved like bear markets, not dips.")
+float  dipMa    = input.float(0.3, "Dip can sit at most σ× below the 40w average", minval = 0.0, step = 0.1, group = G1, display = display.none, tooltip = "v2: dips that had already fallen far below the 40-week average failed twice as often.")
+int    armBars  = input.int(8, "Zone stays armed (weeks)", minval = 1, maxval = 26, group = G1, display = display.none, tooltip = "How many weeks after the last zone week a confirmation can still print a signal.")
+string confMode = input.string("Reversal week or RSI hook", "Confirmation", options = ["Reversal week or RSI hook", "Reversal week only", "RSI hook only"], group = G1, display = display.none, tooltip = "Reversal week = weekly close above the prior week's high. RSI hook = RSI up two weeks in a row with a higher close.")
+float  chaseAtr = input.float(4.0, "Max chase above zone low (ATR)", minval = 0.5, step = 0.5, group = G1, display = display.none, tooltip = "Skip the signal if price has already run more than this many weekly ATRs off the zone low.")
+int    coolBars = input.int(13, "Min weeks between signals", minval = 1, group = G1, display = display.none, tooltip = "Inside this window a new signal needs price to undercut the previous signal's low first.")
+bool   strictRe = input.bool(true, "Repeat BOTTOM needs an extreme score", group = G1, display = display.none, tooltip = "After a BOTTOM fails (price undercuts its low inside the cool-down), the next BOTTOM needs the extreme score.")
+
+string G5 = "② Grade (green vs grey ?)"
+bool   useGrade = input.bool(true, "Grade signals by context", group = G5, display = display.none, tooltip = "Green = context OK. Grey with '?' = market downtrend, stock far below its old highs, a slow grinding decline, a stock falling much harder than the market, or price far under its 40-week average. Grey signals failed about twice as often in testing.")
+string mktSym   = input.symbol("AMEX:SPY", "Market index", group = G5, display = display.none, tooltip = "Market downtrend = index below a falling 40-week average, unless the index itself confirmed a BOTTOM within the last 8 weeks and still holds its low.")
+float  priorMin = input.float(75.0, "Prior strength: 52w high ≥ % of all-time high", minval = 10, maxval = 100, group = G5, display = display.none, tooltip = "Crashes that start near the all-time high recover far more often than new lows in a long decline.")
+int    quickMax = input.int(10, "Quick flush: signal ≤ N weeks after the zone opened", minval = 2, maxval = 52, group = G5, display = display.none)
+float  relMax   = input.float(15.0, "Max lag vs market over 13 weeks (%)", minval = 1, group = G5, display = display.none, tooltip = "v2.1: stocks that fell this much more than the market over 13 weeks (stock-specific selling) kept falling. Applies to BOTTOM and DIP.")
+float  maMax    = input.float(20.0, "BOTTOM: max % below the 40-week average", minval = 1, group = G5, display = display.none, tooltip = "v2.1: BOTTOMs printed more than this far under the 40-week average kept falling twice as often.")
+
+string G2 = "③ Evidence"
+int rsiLen   = input.int(14, "RSI length", minval = 2, group = G2, display = display.none)
+int strLen   = input.int(52, "Stretch average (weeks)", minval = 10, group = G2, display = display.none)
+int wvfLen   = input.int(22, "Fear gauge lookback (weeks)", minval = 5, group = G2, display = display.none)
+int volLen   = input.int(26, "Volume average (weeks)", minval = 5, group = G2, display = display.none)
+int ddLen    = input.int(52, "Drawdown high lookback (weeks)", minval = 10, group = G2, display = display.none)
+int sigLen   = input.int(156, "Volatility baseline (weeks)", minval = 26, group = G2, display = display.none)
+int trendLen = input.int(40, "Uptrend average (weeks)", minval = 10, group = G2, display = display.none)
+
+string G3 = "④ Backtest table"
+bool  showStats = input.bool(true, "Show backtest rows", group = G3, display = display.none)
+bool  showEvid  = input.bool(true, "Show evidence rows", group = G3, display = display.none)
+int   horizon   = input.int(52, "Judge 'at a real low' after (weeks)", minval = 26, maxval = 156, group = G3, display = display.none)
+float majSig    = input.float(1.0, "Major low · swing ≥ σ ×", minval = 0.2, step = 0.1, group = G3, display = display.none)
+float majMin    = input.float(20.0, "Major low · swing ≥ %", minval = 5.0, group = G3, display = display.none)
+float swSig     = input.float(0.5, "Swing low · swing ≥ σ ×", minval = 0.1, step = 0.1, group = G3, display = display.none)
+float swMin     = input.float(10.0, "Swing low · swing ≥ %", minval = 3.0, group = G3, display = display.none)
+int   catchPre  = input.int(2, "Hit if signal ≤ N weeks before a low", minval = 0, group = G3, display = display.none)
+int   catchPost = input.int(8, "Hit if signal ≤ N weeks after a low", minval = 1, group = G3, display = display.none)
+
+string G4 = "⑤ Style"
+bool   showMajor = input.bool(true, "BOTTOM labels (green)", group = G4, display = display.none)
+bool   showMajQ  = input.bool(true, "BOTTOM? labels (grey)", group = G4, display = display.none)
+bool   showDip   = input.bool(true, "DIP labels (blue)", group = G4, display = display.none)
+bool   showDipQ  = input.bool(true, "DIP? labels (grey)", group = G4, display = display.none)
+bool   showWarn  = input.bool(true, "Zone-open dots", group = G4, display = display.none)
+bool   showZone  = input.bool(true, "Zone shading", group = G4, display = display.none)
+bool   showLevel = input.bool(true, "Invalidation line", group = G4, display = display.none)
+string tblPos    = input.string("Top right", "Table position", options = ["Top right", "Middle right", "Bottom right", "Top left", "Bottom left"], group = G4, display = display.none)
+string tblTxt    = input.string("Small", "Table text", options = ["Tiny", "Small", "Normal"], group = G4, display = display.none)
+color  cBot      = input.color(#00C27A, "BOTTOM colour", group = G4, display = display.none)
+color  cDip      = input.color(#2F80ED, "DIP colour", group = G4, display = display.none)
+color  cRisk     = input.color(#6B7280, "Risky (?) colour", group = G4, display = display.none)
+color  cZone     = input.color(#FFB020, "Zone colour", group = G4, display = display.none)
+color  cHot      = input.color(#FF5A1F, "Extreme colour", group = G4, display = display.none)
+
+// ───────────────────────────── HELPERS ─────────────────────────────
+color TXT  = #D1D4DC
+color DIM  = #8A8F9C
+color HEAD = #161A25
+color SECT = #11141C
+color GOOD = #26C281
+color BAD  = #FF6B6B
+
+clamp01(float x) => math.max(0.0, math.min(1.0, x))
+
+// Zig-zag in hindsight (used only to score the backtest): bar_index of a swing low confirmed on this bar, else na
+swingLow(float thr) =>
+    var int   dir    = 1
+    var float ext    = na
+    var int   extBar = na
+    int found = na
+    if na(ext)
+        ext    := high
+        extBar := bar_index
+    else if dir == 1
+        if high >= ext
+            ext    := high
+            extBar := bar_index
+        else if low <= ext * (1.0 - thr)
+            dir    := -1
+            ext    := low
+            extBar := bar_index
+    else
+        if low <= ext
+            ext    := low
+            extBar := bar_index
+        else if high >= ext * (1.0 + thr)
+            found  := extBar
+            dir    := 1
+            ext    := high
+            extBar := bar_index
+    found
+
+fPct(float v, bool sign) => na(v) ? "—" : (sign and v >= 0 ? "+" : "") + str.tostring(v * 100.0, "0.0") + "%"
+fRate(int a, int n) => n > 0 ? str.tostring(a * 100.0 / n, "0") + "%" : "—"
+fMed(array<float> a) => array.size(a) > 0 ? array.median(a) : na
+better(float a, float b, bool hiBetter) => na(a) or na(b) ? TXT : (hiBetter ? a >= b : a <= b) ? GOOD : BAD
+deepRate(array<float> a) =>
+    int n = array.size(a)
+    int k = 0
+    if n > 0
+        for v in a
+            if v < -0.2
+                k += 1
+    n > 0 ? k * 1.0 / n : na
+
+// Same engine run on the market index (through request.security): 1 = market OK, 0 = market downtrend
+marketState() =>
+    float r   = ta.rsi(close, rsiLen)
+    float hC  = ta.highest(close, wvfLen)
+    float wv  = hC > 0 ? (hC - low) / hC * 100.0 : 0.0
+    float wMa = ta.sma(wv, 20)
+    float wSd = ta.stdev(wv, 20)
+    float wUp = wMa + 2.0 * wSd
+    float fR  = wUp > 0 ? wv / wUp : 0.0
+    float bs  = ta.sma(close, strLen)
+    float sd  = ta.stdev(close, strLen)
+    float zz  = sd > 0 ? (close - bs) / sd : 0.0
+    float h52 = ta.highest(high, ddLen)
+    float d   = h52 > 0 ? close / h52 - 1.0 : 0.0
+    float l1  = nz(math.log(close / close[1]))
+    float v3  = ta.stdev(l1, sigLen) * math.sqrt(52.0)
+    float v1  = ta.stdev(l1, 52) * math.sqrt(52.0)
+    float sg  = not na(v3) ? v3 : not na(v1) ? v1 : 0.35
+    float va  = ta.sma(volume, volLen)
+    bool  hv  = not na(volume) and not na(va) and va > 0
+    float vrr = hv ? volume / va : 0.0
+    float vm  = math.max(vrr, nz(vrr[1]), nz(vrr[2]))
+    var int dc = 0
+    dc := close < close[4] ? dc + 1 : 0
+    int   ex  = math.max(dc, nz(dc[1]), nz(dc[2]))
+    float sc  = na(r) ? na : 100.0 * (22.0 * nz(clamp01((45.0 - r) / 20.0)) + 20.0 * nz(clamp01((fR - 0.75) / 0.35)) + 14.0 * nz(clamp01((-zz - 0.5) / 2.0)) + 14.0 * nz(clamp01((-d / sg - 0.3) / 0.9)) + 10.0 * nz(clamp01((ex - 4) / 5.0)) + (hv ? 10.0 * nz(clamp01((vm - 1.2) / 1.3)) : 0.0)) / (80.0 + (hv ? 10.0 : 0.0))
+    float at  = ta.atr(14)
+    float mT  = ta.sma(close, trendLen)
+    float mL  = ta.sma(close, 100)
+    float sw  = math.max(swMin / 100.0, swSig * sg)
+    float mj  = math.max(majMin / 100.0, majSig * sg)
+    bool  up  = mT > mT[8] and (close > mL or -d < mj)
+    bool  mz  = sc >= zoneTh
+    bool  dz  = not mz and sc >= dipTh and -d >= sw and (not dipTrend or up)
+    float l3  = ta.lowest(low, 3)
+    float hiA = ta.max(high)
+    var int   aT = 0
+    var float sL = na
+    var int   lz = na
+    var float pk = 0.0
+    var int   lb = na
+    var float ll = na
+    var int   lt = 0
+    var int   mBar = na
+    var float mLow = na
+    var bool  mBroke = false
+    int zt = mz ? 1 : dz ? 2 : 0
+    if zt != 0
+        if aT == 0
+            aT := zt
+            sL := l3
+            pk := sc
+            lz := bar_index
+        else
+            if zt == 1 and aT == 2
+                aT := 1
+            if zt == 1 or aT == 2
+                lz := bar_index
+            pk := math.max(pk, sc)
+    if aT != 0
+        if low < sL
+            sL := low
+        if bar_index - lz > armBars
+            aT := 0
+            sL := na
+            pk := 0.0
+    bool rw = close > high[1]
+    bool rk = r > r[1] and r[1] > r[2] and close > close[1]
+    bool tg = confMode == "Reversal week only" ? rw : confMode == "RSI hook only" ? rk : (rw or rk)
+    bool ch = not na(sL) and not na(at) and close <= sL + chaseAtr * at
+    bool nl = not na(ll) and not na(sL) and sL < ll
+    bool ro = nl and (not strictRe or lt != 1 or pk >= warnTh)
+    bool co = na(lb) or bar_index - lb >= coolBars or ro
+    bool fr = aT != 0 and tg and ch and co
+    if fr and aT == 2
+        fr := close / hiA - 1.0 >= -dipAth / 100.0 and (na(mT) or close / mT - 1.0 >= -dipMa * sg)
+    if not na(mBar) and close < mLow
+        mBroke := true
+    if fr
+        if aT == 1
+            mBar   := bar_index
+            mLow   := sL
+            mBroke := false
+        lb := bar_index
+        ll := sL
+        lt := aT
+        aT := 0
+        sL := na
+        pk := 0.0
+    bool holds = not na(mBar) and bar_index - mBar <= 8 and not mBroke
+    bool bear  = close < mT and mT < mT[8]
+    bear and not holds ? 0.0 : 1.0
+
+// ───────────────────────────── EVIDENCE ─────────────────────────────
+// 1 · oversold momentum
+float rsi  = ta.rsi(close, rsiLen)
+float sRsi = clamp01((45.0 - rsi) / 20.0)
+// 2 · fear gauge: Williams VIX Fix against its upper band
+float hiC   = ta.highest(close, wvfLen)
+float wvf   = hiC > 0 ? (hiC - low) / hiC * 100.0 : 0.0
+float wvfMa = ta.sma(wvf, 20)
+float wvfSd = ta.stdev(wvf, 20)
+float wvfUp = wvfMa + 2.0 * wvfSd
+float fearR = wvfUp > 0 ? wvf / wvfUp : 0.0
+float sFear = clamp01((fearR - 0.75) / 0.35)
+// 3 · stretch below the 52-week mean
+float basis = ta.sma(close, strLen)
+float sdev  = ta.stdev(close, strLen)
+float z     = sdev > 0 ? (close - basis) / sdev : 0.0
+float sStr  = clamp01((-z - 0.5) / 2.0)
+// 4 · drawdown scaled by this chart's normal volatility
+float hh    = ta.highest(high, ddLen)
+float dd    = hh > 0 ? close / hh - 1.0 : 0.0
+float lr    = nz(math.log(close / close[1]))
+float vol3y = ta.stdev(lr, sigLen) * math.sqrt(52.0)
+float vol1y = ta.stdev(lr, 52) * math.sqrt(52.0)
+float sigma = not na(vol3y) ? vol3y : not na(vol1y) ? vol1y : 0.35
+float ddN   = sigma > 0 ? -dd / sigma : 0.0
+float sDd   = clamp01((ddN - 0.3) / 0.9)
+// 5 · capitulation volume
+float vAvg   = ta.sma(volume, volLen)
+bool  hasVol = not na(volume) and not na(vAvg) and vAvg > 0
+float vr     = hasVol ? volume / vAvg : 0.0
+float vrMax  = math.max(vr, nz(vr[1]), nz(vr[2]))
+float sVol   = clamp01((vrMax - 1.2) / 1.3)
+// 6 · trend exhaustion: consecutive closes below the close 4 weeks earlier
+var int dnCnt = 0
+dnCnt := close < close[4] ? dnCnt + 1 : 0
+int   exh  = math.max(dnCnt, nz(dnCnt[1]), nz(dnCnt[2]))
+float sExh = clamp01((exh - 4) / 5.0)
+
+// ───────────────────────────── SCORE (v2: divergence removed) ─────────────────────────────
+float wSum  = 22.0 + 20.0 + 14.0 + 14.0 + 10.0 + (hasVol ? 10.0 : 0.0)
+float raw   = 22.0 * nz(sRsi) + 20.0 * nz(sFear) + 14.0 * nz(sStr) + 14.0 * nz(sDd) + 10.0 * nz(sExh) + (hasVol ? 10.0 * nz(sVol) : 0.0)
+float score = na(rsi) ? na : 100.0 * raw / wSum
+
+// ───────────────────────────── CONTEXT ─────────────────────────────
+[mktRaw, mktC] = request.security(mktSym, timeframe.period, [marketState(), close])
+bool  mktOK  = nz(mktRaw, 1.0) >= 0.5
+float athAll = ta.max(high)
+bool  strong = hh / athAll >= priorMin / 100.0
+float rel13  = (close / close[13]) / (mktC / mktC[13]) - 1.0
+bool  relOK  = na(rel13) or rel13 >= -relMax / 100.0
+
+// ───────────────────────────── ZONES ─────────────────────────────
+float atr    = ta.atr(14)
+float maT    = ta.sma(close, trendLen)
+float maL    = ta.sma(close, 100)
+float swDD   = math.max(swMin / 100.0, swSig * sigma)
+float majDD  = math.max(majMin / 100.0, majSig * sigma)
+bool  upTr   = maT > maT[8] and (close > maL or -dd < majDD)
+bool  majorZone = score >= zoneTh
+bool  dipZone   = not majorZone and score >= dipTh and -dd >= swDD and (not dipTrend or upTr)
+bool  zoneNow   = majorZone or dipZone
+int   zoneTier  = majorZone ? 1 : dipZone ? 2 : 0
+float lo3    = ta.lowest(low, 3)
+int   lo3Off = ta.lowestbars(low, 3)
+float lo9    = ta.lowest(low, 9)
+bool  warnX  = ta.crossover(score, warnTh)
+bool  dipOK  = close / athAll - 1.0 >= -dipAth / 100.0 and (na(maT) or close / maT - 1.0 >= -dipMa * sigma)
+bool  maOK   = na(maT) or close / maT - 1.0 >= -maMax / 100.0
+
+// ───────────────────────────── STATE ─────────────────────────────
+var int   armTier     = 0
+var float setupLow    = na
+var int   setupBar    = na
+var int   lastZone    = na
+var int   armStart    = na
+var float peakScore   = 0.0
+var int   lastSigBar  = na
+var float lastSigLow  = na
+var int   lastSigTier = 0
+var int   lastSigCls  = 0
+bool majOpen = false
+if zoneNow
+    if armTier == 0
+        armTier   := zoneTier
+        setupLow  := lo3
+        setupBar  := bar_index + lo3Off
+        peakScore := score
+        lastZone  := bar_index
+        armStart  := bar_index
+        majOpen   := zoneTier == 1
+    else
+        if zoneTier == 1 and armTier == 2
+            armTier := 1
+            majOpen := true
+        if zoneTier == 1 or armTier == 2
+            lastZone := bar_index
+        peakScore := math.max(peakScore, score)
+if armTier != 0
+    if low < setupLow
+        setupLow := low
+        setupBar := bar_index
+    if bar_index - lastZone > armBars
+        armTier   := 0
+        setupLow  := na
+        setupBar  := na
+        peakScore := 0.0
+        armStart  := na
+
+// ───────────────────────────── CONFIRMATION ─────────────────────────────
+bool revWk   = close > high[1]
+bool rsiHk   = rsi > rsi[1] and rsi[1] > rsi[2] and close > close[1]
+bool trig    = confMode == "Reversal week only" ? revWk : confMode == "RSI hook only" ? rsiHk : (revWk or rsiHk)
+bool chaseOK = not na(setupLow) and not na(atr) and close <= setupLow + chaseAtr * atr
+bool newLow  = not na(lastSigLow) and not na(setupLow) and setupLow < lastSigLow
+bool reOK    = newLow and (not strictRe or lastSigTier != 1 or peakScore >= warnTh)
+bool coolOK  = na(lastSigBar) or bar_index - lastSigBar >= coolBars or reOK
+// a weekly bar only counts as closed once its week is over (guards the last bar when the market is shut mid-week)
+bool closed  = barstate.isconfirmed and not (barstate.islast and not barstate.isrealtime and timenow < time_close)
+bool setupOK = armTier != 0 and trig and chaseOK and coolOK and (armTier == 1 or dipOK)
+bool fire    = setupOK and closed
+bool pend    = setupOK and not closed
+bool quick   = not na(armStart) and bar_index - armStart <= quickMax
+bool hiConf  = not useGrade or (armTier == 1 ? (mktOK and strong and quick and relOK and maOK) : (mktOK and relOK))
+// class: 1 BOTTOM · 3 BOTTOM? · 2 DIP · 4 DIP?
+int  sigCls  = armTier == 1 ? (hiConf ? 1 : 3) : (hiConf ? 2 : 4)
+bool sigBot  = fire and sigCls == 1
+bool sigBotQ = fire and sigCls == 3
+bool sigDip  = fire and sigCls == 2
+bool sigDipQ = fire and sigCls == 4
+
+// ───────────────────────────── BACKTEST: OPEN SIGNALS ─────────────────────────────
+var array<Sig> openSigs = array.new<Sig>()
+var Stats stB  = Stats.new(dist = array.new<float>(), drop = array.new<float>())
+var Stats stBq = Stats.new(dist = array.new<float>(), drop = array.new<float>())
+var Stats stD  = Stats.new(dist = array.new<float>(), drop = array.new<float>())
+var Stats stDq = Stats.new(dist = array.new<float>(), drop = array.new<float>())
+statFor(int c) => c == 1 ? stB : c == 3 ? stBq : c == 2 ? stD : stDq
+int nOpen = array.size(openSigs)
+if nOpen > 0
+    for i = nOpen - 1 to 0
+        Sig s   = array.get(openSigs, i)
+        int age = bar_index - s.bi
+        s.minLow := math.min(s.minLow, low)
+        if age >= 26
+            Stats st = statFor(s.cls)
+            float r = close / s.entry - 1.0
+            st.r26  := st.r26 + r
+            st.n26  := st.n26 + 1
+            st.up26 := st.up26 + (r > 0 ? 1 : 0)
+            array.push(st.dist, s.entry / math.min(s.preLow, s.minLow) - 1.0)
+            array.push(st.drop, s.minLow / s.entry - 1.0)
+            array.remove(openSigs, i)
+
+// ───────────────────────────── SIGNALS ─────────────────────────────
+var array<int>  sigBars   = array.new<int>()
+var array<int>  sigClsA   = array.new<int>()
+var array<bool> sigHit    = array.new<bool>()
+var bool        sigBroken = false
+var line        invLn     = na
+var float       invLvl    = na
+var int         invBar    = na
+
+if not na(lastSigLow) and close < lastSigLow
+    sigBroken := true
+
+if fire
+    bool   isBot = armTier == 1
+    bool   risky = sigCls >= 3
+    color  tc    = risky ? cRisk : isBot ? cBot : cDip
+    Stats  st0   = statFor(sigCls)
+    st0.n := st0.n + 1
+    array.push(openSigs, Sig.new(bar_index, sigCls, close, lo9, close))
+    array.push(sigBars, bar_index)
+    array.push(sigClsA, sigCls)
+    array.push(sigHit, false)
+    string why = (mktOK ? "" : "\n• market in a downtrend") + (isBot and not strong ? "\n• stock far below its old highs" : "") + (isBot and not quick ? "\n• slow, grinding decline" : "") + (relOK ? "" : "\n• falling much harder than the market") + (isBot and not maOK ? "\n• price far under its 40-week average" : "")
+    string tip = (isBot ? "BOTTOM" : "DIP") + (risky ? "? · risky context" + why : " · context OK") + "\nPeak score: " + str.tostring(peakScore, "#") + "\nEntry (weekly close): " + str.tostring(close, format.mintick) + "\nInvalidation (zone low): " + str.tostring(setupLow, format.mintick) + "\nRisk to invalidation: " + str.tostring((close / setupLow - 1.0) * 100.0, "0.0") + "%"
+    bool show = sigCls == 1 ? showMajor : sigCls == 3 ? showMajQ : sigCls == 2 ? showDip : showDipQ
+    if show
+        label.new(bar_index, low, (isBot ? "BOTTOM" : "DIP") + (risky ? "?" : ""), xloc = xloc.bar_index, yloc = yloc.belowbar, color = tc, style = label.style_label_up, textcolor = color.white, size = isBot and not risky ? size.normal : size.small, tooltip = tip, force_overlay = true)
+    if showLevel and show
+        if not na(invLn)
+            line.set_extend(invLn, extend.none)
+            line.set_x2(invLn, bar_index)
+        invLn  := line.new(setupBar, setupLow, bar_index, setupLow, xloc = xloc.bar_index, extend = extend.right, color = color.new(tc, 20), style = line.style_dashed, width = 1, force_overlay = true)
+        invLvl := setupLow
+        invBar := bar_index
+    lastSigBar  := bar_index
+    lastSigLow  := setupLow
+    lastSigTier := armTier
+    lastSigCls  := sigCls
+    sigBroken   := false
+    armTier     := 0
+    setupLow    := na
+    setupBar    := na
+    peakScore   := 0.0
+    armStart    := na
+else if not na(invLn)
+    if close < invLvl or bar_index - invBar >= 52
+        line.set_extend(invLn, extend.none)
+        line.set_x2(invLn, bar_index)
+        invLn := na
+
+// ───────────────────────────── REAL LOWS (hindsight, scoring only) ─────────────────────────────
+int newMajLow = swingLow(majDD)
+int newSwLow  = swingLow(swDD)
+var array<int> pendMaj = array.new<int>()
+var array<int> pendSw  = array.new<int>()
+var int majLows   = 0
+var int majHitsG  = 0
+var int majHitsA  = 0
+var int swLows    = 0
+var int swHits    = 0
+if not na(newMajLow)
+    array.push(pendMaj, newMajLow)
+if not na(newSwLow)
+    array.push(pendSw, newSwLow)
+while array.size(pendMaj) > 0 and bar_index >= array.get(pendMaj, 0) + catchPost
+    int  j  = array.shift(pendMaj)
+    bool hG = false
+    bool hA = false
+    int  ns = array.size(sigBars)
+    if ns > 0
+        for k = ns - 1 to 0
+            int sb = array.get(sigBars, k)
+            if sb < j - catchPre
+                break
+            int c = array.get(sigClsA, k)
+            if sb <= j + catchPost and (c == 1 or c == 3)
+                hA := true
+                hG := hG or c == 1
+    majLows += 1
+    majHitsG += hG ? 1 : 0
+    majHitsA += hA ? 1 : 0
+while array.size(pendSw) > 0 and bar_index >= array.get(pendSw, 0) + catchPost
+    int  j   = array.shift(pendSw)
+    bool hit = false
+    int  ns  = array.size(sigBars)
+    if ns > 0
+        for k = ns - 1 to 0
+            int sb = array.get(sigBars, k)
+            if sb < j - catchPre
+                break
+            if sb <= j + catchPost
+                hit := true
+                array.set(sigHit, k, true)
+    swLows += 1
+    if hit
+        swHits += 1
+
+// ───────────────────────────── BASELINES ─────────────────────────────
+// Naive dip-buy = every week that already sat as far below its 52-week high as the tier requires,
+// scored exactly like a signal 26 weeks later. Beating it means the timing adds value, not just the dip.
+addObs(Stats st, float r, float dv, float dr) =>
+    st.n    := st.n + 1
+    st.r26  := st.r26 + r
+    st.n26  := st.n26 + 1
+    st.up26 := st.up26 + (r > 0 ? 1 : 0)
+    array.push(st.dist, dv)
+    array.push(st.drop, dr)
+
+var Stats nvB = Stats.new(dist = array.new<float>(), drop = array.new<float>())
+var Stats nvD = Stats.new(dist = array.new<float>(), drop = array.new<float>())
+float min26 = ta.lowest(low, 26)
+float e26   = close[26]
+float pre26 = lo9[26]
+float dd26  = dd[26]
+float maj26 = majDD[26]
+float sw26  = swDD[26]
+if not na(e26) and not na(pre26) and not na(min26) and not na(dd26)
+    float m  = math.min(e26, min26)
+    float r  = close / e26 - 1.0
+    float dv = e26 / math.min(pre26, m) - 1.0
+    float dr = m / e26 - 1.0
+    if not na(maj26) and -dd26 >= maj26
+        addObs(nvB, r, dv, dr)
+    if not na(sw26) and -dd26 >= sw26
+        addObs(nvD, r, dv, dr)
+
+// ───────────────────────────── VISUALS · SCORE PANE ─────────────────────────────
+color colScore = dipZone ? color.new(cDip, 25) : score >= zoneTh ? color.from_gradient(score, zoneTh, 100, cZone, cHot) : color.from_gradient(nz(score), 0, zoneTh, color.new(#787B86, 88), color.new(#787B86, 45))
+plot(score, "Bottom score", color = colScore, style = plot.style_columns)
+hTop  = hline(100, "Top", color = color.new(#787B86, 100), display = display.none)
+hWarn = hline(warnTh, "Extreme line", color = color.new(cHot, 35), linestyle = hline.style_dotted)
+hZone = hline(zoneTh, "Zone line", color = color.new(cZone, 25), linestyle = hline.style_dashed)
+hDip  = hline(dipTh, "Dip line", color = color.new(cDip, 45), linestyle = hline.style_dotted)
+fill(hZone, hTop, color = color.new(cZone, 94), title = "Zone band")
+plotshape(sigBot or sigBotQ, "BOTTOM marker", shape.triangleup, location.bottom, color = sigBot ? cBot : cRisk, size = size.tiny)
+plotshape(sigDip or sigDipQ, "DIP marker", shape.triangleup, location.bottom, color = sigDip ? cDip : cRisk, size = size.tiny)
+plot(nz(sRsi) * 100, "Evidence · RSI", display = display.data_window)
+plot(nz(sFear) * 100, "Evidence · Fear", display = display.data_window)
+plot(nz(sStr) * 100, "Evidence · Stretch", display = display.data_window)
+plot(nz(sDd) * 100, "Evidence · Drawdown", display = display.data_window)
+plot(hasVol ? nz(sVol) * 100 : na, "Evidence · Volume", display = display.data_window)
+plot(nz(sExh) * 100, "Evidence · Exhaustion", display = display.data_window)
+plot(mktOK ? 1 : 0, "Context · market OK", display = display.data_window)
+
+// ───────────────────────────── VISUALS · PRICE CHART ─────────────────────────────
+bgcolor(showZone and majorZone ? color.new(cZone, 80) : showZone and dipZone ? color.new(cDip, 87) : na, title = "Zone shading", force_overlay = true)
+plotshape(showWarn and (majOpen or warnX), "Zone dot", shape.circle, location.belowbar, color = score >= warnTh ? cHot : cZone, size = size.tiny, force_overlay = true)
+
+// ───────────────────────────── DASHBOARD ─────────────────────────────
+f_pos(string p) =>
+    switch p
+        "Top right"    => position.top_right
+        "Middle right" => position.middle_right
+        "Bottom right" => position.bottom_right
+        "Top left"     => position.top_left
+        => position.bottom_left
+
+string txtSz = tblTxt == "Tiny" ? size.tiny : tblTxt == "Normal" ? size.normal : size.small
+var table tb = table.new(f_pos(tblPos), 8, 14, bgcolor = color.new(#0B0E14, 6), frame_color = #2A2E39, frame_width = 1, border_color = color.new(#2A2E39, 30), border_width = 1, force_overlay = true)
+
+tcell(int c, int r, string t, color tcol, color bg, string al, string tip) =>
+    table.cell(tb, c, r, t, text_color = tcol, bgcolor = bg, text_halign = al, text_size = txtSz, tooltip = tip)
+
+heat(float s) => color.from_gradient(nz(s), 0.0, 1.0, #1E222D, color.new(cZone, 10))
+
+// one backtest row: BOTTOM | BOTTOM? | DIP | naive dip-buy
+stRow(int r, string name, string a, color ac, string q, color qc, string b, color bc, string nv, string tip) =>
+    tcell(0, r, name, TXT, color(na), text.align_left, tip)
+    tcell(1, r, a, ac, color(na), text.align_center, tip)
+    tcell(3, r, q, qc, color(na), text.align_center, tip)
+    tcell(4, r, b, bc, color(na), text.align_center, tip)
+    tcell(6, r, nv, DIM, color(na), text.align_center, tip)
+    table.merge_cells(tb, 1, r, 2, r)
+    table.merge_cells(tb, 4, r, 5, r)
+    table.merge_cells(tb, 6, r, 7, r)
+
+upRate(Stats st) => st.n26 > 0 ? st.up26 * 1.0 / st.n26 : na
+avgRet(Stats st) => st.n26 > 0 ? st.r26 / st.n26 : na
+
+int bsSig = ta.barssince(fire)
+
+// last-bar summary (shown in the table and exported as hidden plots for batch backtests)
+var int   xEvB  = 0
+var int   xOkB  = 0
+var int   xEvBq = 0
+var int   xOkBq = 0
+var int   xEvD  = 0
+var int   xOkD  = 0
+var float xDistB = na
+var float xDistBq = na
+var float xDistD = na
+var float xDistNB = na
+var float xDistND = na
+var float xDropB = na
+var float xDropBq = na
+var float xDropD = na
+var float xDropNB = na
+var float xDropND = na
+var float xDeepB = na
+var float xDeepBq = na
+var float xDeepD = na
+var float xDeepNB = na
+var float xDeepND = na
+
+if barstate.islast
+    xEvB := 0
+    xOkB := 0
+    xEvBq := 0
+    xOkBq := 0
+    xEvD := 0
+    xOkD := 0
+    int nS = array.size(sigBars)
+    if nS > 0
+        for k = 0 to nS - 1
+            if bar_index - array.get(sigBars, k) >= horizon
+                int  c = array.get(sigClsA, k)
+                int  h = array.get(sigHit, k) ? 1 : 0
+                if c == 1
+                    xEvB += 1
+                    xOkB += h
+                else if c == 3
+                    xEvBq += 1
+                    xOkBq += h
+                else
+                    xEvD += 1
+                    xOkD += h
+    xDistB  := fMed(stB.dist)
+    xDistBq := fMed(stBq.dist)
+    xDistD  := fMed(stD.dist)
+    xDistNB := fMed(nvB.dist)
+    xDistND := fMed(nvD.dist)
+    xDropB  := fMed(stB.drop)
+    xDropBq := fMed(stBq.drop)
+    xDropD  := fMed(stD.drop)
+    xDropNB := fMed(nvB.drop)
+    xDropND := fMed(nvD.drop)
+    xDeepB  := deepRate(stB.drop)
+    xDeepBq := deepRate(stBq.drop)
+    xDeepD  := deepRate(stD.drop)
+    xDeepNB := deepRate(nvB.drop)
+    xDeepND := deepRate(nvD.drop)
+
+    table.clear(tb, 0, 0, 7, 13)
+    tcell(0, 0, "◎ BOTTOM RADAR v2.1", color.white, HEAD, text.align_left, "Weekly capitulation & reversal finder. Signals print only on closed weekly bars.")
+    tcell(1, 0, syminfo.ticker + " · " + timeframe.period + (timeframe.isweekly ? "" : "  ⚠ built for 1W"), DIM, HEAD, text.align_right, "Current bar closes " + str.format_time(time_close, "EEE yyyy-MM-dd HH:mm", syminfo.timezone))
+    table.merge_cells(tb, 1, 0, 7, 0)
+    string gradeNow = useGrade ? ((armTier == 1 ? (mktOK and strong and quick and relOK and maOK) : (mktOK and relOK)) ? "would be green" : "would be grey ?") : ""
+    string stTxt = "No bottom setup"
+    color  stCol = DIM
+    if pend
+        stTxt := (armTier == 1 ? "▲ BOTTOM" : "▲ DIP") + (hiConf ? "" : "?") + " forming · confirms at the weekly close"
+        stCol := hiConf ? (armTier == 1 ? cBot : cDip) : cRisk
+    else if not na(bsSig) and bsSig == 0
+        stTxt := "▲ " + (lastSigTier == 1 ? "BOTTOM" : "DIP") + (lastSigCls >= 3 ? "?" : "") + " confirmed this week"
+        stCol := lastSigCls >= 3 ? cRisk : lastSigTier == 1 ? cBot : cDip
+    else if armTier == 1
+        stTxt := "◆ Bottoming zone · waiting for a reversal week (" + gradeNow + ")"
+        stCol := cZone
+    else if armTier == 2
+        stTxt := "◆ Dip zone · waiting for a reversal week (" + gradeNow + ")"
+        stCol := cDip
+    else if not na(bsSig) and bsSig <= 26
+        stTxt := (lastSigTier == 1 ? "BOTTOM" : "DIP") + (lastSigCls >= 3 ? "? " : " ") + str.tostring(bsSig) + "w ago · " + (sigBroken ? "broke " : "holding above ") + str.tostring(lastSigLow, format.mintick)
+        stCol := sigBroken ? BAD : lastSigCls >= 3 ? cRisk : lastSigTier == 1 ? cBot : cDip
+    color scBg = score >= zoneTh ? color.from_gradient(score, zoneTh, 100, cZone, cHot) : dipZone ? cDip : #2A2E39
+    tcell(0, 1, "Score", TXT, color(na), text.align_left, "")
+    tcell(1, 1, str.tostring(score, "#"), color.white, scBg, text.align_center, "0-100 composite capitulation score. ≥" + str.tostring(zoneTh) + " opens a bottoming zone; ≥" + str.tostring(warnTh) + " is extreme.")
+    tcell(2, 1, stTxt, stCol, color(na), text.align_left, "")
+    table.merge_cells(tb, 2, 1, 7, 1)
+    int r = 2
+    if showEvid
+        string ctxTxt = (mktOK ? "mkt✓" : "mkt✗") + " " + (relOK ? "rs✓" : "rs✗") + " " + (strong ? "hi✓" : "hi✗") + " " + (maOK ? "ma✓" : "ma✗")
+        tcell(0, r, "Evidence", DIM, SECT, text.align_left, "Six capitulation signs (brighter = stronger) plus the context that grades a signal.")
+        tcell(1, r, "RSI", DIM, SECT, text.align_center, "Weekly RSI. Full credit at 25, none above 45.")
+        tcell(2, r, "Fear", DIM, SECT, text.align_center, "Williams VIX Fix against its upper band: a fear spike measured from price alone.")
+        tcell(3, r, "Stretch", DIM, SECT, text.align_center, "Distance below the 52-week average, in standard deviations.")
+        tcell(4, r, "Drawdown", DIM, SECT, text.align_center, "Fall from the 52-week high, scaled by this chart's yearly volatility (" + str.tostring(sigma * 100.0, "#") + "%).")
+        tcell(5, r, "Volume", DIM, SECT, text.align_center, "Biggest weekly volume of the last 3 weeks vs the 26-week average.")
+        tcell(6, r, "Exhaust.", DIM, SECT, text.align_center, "Consecutive weekly closes below the close 4 weeks earlier. 9+ = full credit.")
+        tcell(7, r, "Context", DIM, SECT, text.align_center, "mkt = market index not in a downtrend (or it just confirmed its own bottom). rs = not lagging the market by more than " + str.tostring(relMax, "#") + "% over 13 weeks. hi = 52-week high within " + str.tostring(100 - priorMin, "#") + "% of the all-time high. ma = price within " + str.tostring(maMax, "#") + "% of the 40-week average.")
+        tcell(0, r + 1, "Now", TXT, color(na), text.align_left, "")
+        tcell(1, r + 1, str.tostring(rsi, "#"), color.white, heat(sRsi), text.align_center, "")
+        tcell(2, r + 1, str.tostring(fearR, "0.00") + "×", color.white, heat(sFear), text.align_center, "")
+        tcell(3, r + 1, str.tostring(z, "0.0") + "σ", color.white, heat(sStr), text.align_center, "")
+        tcell(4, r + 1, str.tostring(dd * 100.0, "#") + "%", color.white, heat(sDd), text.align_center, "")
+        tcell(5, r + 1, hasVol ? str.tostring(vrMax, "0.0") + "×" : "n/a", color.white, heat(sVol), text.align_center, "")
+        tcell(6, r + 1, str.tostring(exh), color.white, heat(sExh), text.align_center, "")
+        tcell(7, r + 1, ctxTxt, color.white, mktOK and strong and relOK and maOK ? color.new(GOOD, 55) : color.new(BAD, 55), text.align_center, "")
+        r += 2
+    if showStats
+        tcell(0, r, "Backtest · this chart", DIM, SECT, text.align_left, "Every signal on the loaded history, scored after the fact. Green = better than the naive dip-buy baseline, red = worse.")
+        tcell(1, r, "BOTTOM", cBot, SECT, text.align_center, "Green BOTTOM: capitulation + reversal with the context OK.")
+        tcell(3, r, "BOTTOM?", cRisk, SECT, text.align_center, "Grey BOTTOM?: same setup but the market was in a downtrend, the stock was far below its old highs, the decline was slow, the stock was falling much harder than the market, or price was far under its 40-week average.")
+        tcell(4, r, "DIP", cDip, SECT, text.align_center, "Pullback lows in an uptrend near the highs (green DIP only).")
+        tcell(6, r, "naive", DIM, SECT, text.align_center, "Naive dip-buy for BOTTOM: every week already ≥ max(" + str.tostring(majMin, "#") + "%, " + str.tostring(majSig, "#.#") + "σ) below its 52-week high, scored the same way.")
+        table.merge_cells(tb, 1, r, 2, r)
+        table.merge_cells(tb, 4, r, 5, r)
+        table.merge_cells(tb, 6, r, 7, r)
+        stRow(r + 1, "Signals · naive weeks", str.tostring(stB.n), TXT, str.tostring(stBq.n), TXT, str.tostring(stD.n), TXT, str.tostring(nvB.n) + "w", "Signals fired on this chart (DIP? signals: " + str.tostring(stDq.n) + "), next to the number of naive dip-buy weeks.")
+        stRow(r + 2, "Distance from true low", fPct(xDistB, true), better(xDistB, xDistNB, false), fPct(xDistBq, true), better(xDistBq, xDistNB, false), fPct(xDistD, true), better(xDistD, xDistND, false), fPct(xDistNB, true), "Median gap between the entry and the lowest low from 8 weeks before to 26 weeks after it. Lower = closer to the real bottom. DIP is compared with its own naive baseline (" + fPct(xDistND, true) + ").")
+        stRow(r + 3, "Further drop (median)", fPct(xDropB, false), better(xDropB, xDropNB, true), fPct(xDropBq, false), better(xDropBq, xDropNB, true), fPct(xDropD, false), better(xDropD, xDropND, true), fPct(xDropNB, false), "Median deepest drop below the entry within 26 weeks. Closer to 0 = fewer falling knives. DIP naive: " + fPct(xDropND, false) + ".")
+        stRow(r + 4, "Fell >20% after", fPct(xDeepB, false), better(xDeepB, xDeepNB, false), fPct(xDeepBq, false), better(xDeepBq, xDeepNB, false), fPct(xDeepD, false), better(xDeepD, xDeepND, false), fPct(xDeepNB, false), "Share of entries that fell more than 20% further within 26 weeks (falling knives). DIP naive: " + fPct(xDeepND, false) + ".")
+        stRow(r + 5, "Signals at a real low", fRate(xOkB, xEvB), TXT, fRate(xOkBq, xEvBq), TXT, fRate(xOkD, xEvD), TXT, "—", "Share of signals within " + str.tostring(catchPre) + "w before / " + str.tostring(catchPost) + "w after a real swing low (one followed by a rebound of max(" + str.tostring(swMin, "#") + "%, " + str.tostring(swSig, "#.#") + "σ)). Signals younger than " + str.tostring(horizon) + " weeks are not judged yet.")
+        stRow(r + 6, "Real lows caught", majLows > 0 ? str.tostring(majHitsG) + "/" + str.tostring(majLows) + " major" : "—", TXT, majLows > 0 ? str.tostring(majHitsA) + "/" + str.tostring(majLows) + " w/ grey" : "—", TXT, swLows > 0 ? str.tostring(swHits) + "/" + str.tostring(swLows) + " all" : "—", TXT, "—", "BOTTOM: major lows (swing ≥ max(" + str.tostring(majMin, "#") + "%, " + str.tostring(majSig, "#.#") + "σ)) with a green BOTTOM in the hit window. BOTTOM?: counting grey ones too. DIP: every swing low with any signal in the hit window.")
+        stRow(r + 7, "Higher 26w later", fRate(stB.up26, stB.n26), better(upRate(stB), upRate(nvB), true), fRate(stBq.up26, stBq.n26), better(upRate(stBq), upRate(nvB), true), fRate(stD.up26, stD.n26), better(upRate(stD), upRate(nvD), true), fRate(nvB.up26, nvB.n26), "Share of entries that were higher 26 weeks later.")
+        stRow(r + 8, "Avg return 26w", fPct(avgRet(stB), true), better(avgRet(stB), avgRet(nvB), true), fPct(avgRet(stBq), true), better(avgRet(stBq), avgRet(nvB), true), fPct(avgRet(stD), true), better(avgRet(stD), avgRet(nvD), true), fPct(avgRet(nvB), true), "Average close-to-close return 26 weeks after entry.")
+
+// ───────────────────────────── ALERTS ─────────────────────────────
+alertcondition(sigBot, "BOTTOM confirmed (green)", "Bottom Radar: weekly BOTTOM confirmed on {{exchange}}:{{ticker}} at {{close}}")
+alertcondition(sigBot or sigBotQ, "BOTTOM confirmed (any grade)", "Bottom Radar: weekly BOTTOM or BOTTOM? on {{exchange}}:{{ticker}} at {{close}}")
+alertcondition(sigDip, "DIP confirmed (green)", "Bottom Radar: weekly DIP confirmed on {{exchange}}:{{ticker}} at {{close}}")
+alertcondition(majOpen and closed, "Bottoming zone opened", "Bottom Radar: capitulation zone opened on {{exchange}}:{{ticker}}")
+
+// ───────────────────────────── HIDDEN EXPORTS (last bar only, for batch backtests) ─────────────────────────────
+bool L = barstate.islast
+plot(L ? stB.n : na, "x_nB", display = display.none)
+plot(L ? stBq.n : na, "x_nBq", display = display.none)
+plot(L ? stD.n : na, "x_nD", display = display.none)
+plot(L ? stDq.n : na, "x_nDq", display = display.none)
+plot(L ? xDistB : na, "x_distB", display = display.none)
+plot(L ? xDistBq : na, "x_distBq", display = display.none)
+plot(L ? xDistD : na, "x_distD", display = display.none)
+plot(L ? xDistNB : na, "x_distNB", display = display.none)
+plot(L ? xDistND : na, "x_distND", display = display.none)
+plot(L ? xDropB : na, "x_dropB", display = display.none)
+plot(L ? xDropBq : na, "x_dropBq", display = display.none)
+plot(L ? xDropD : na, "x_dropD", display = display.none)
+plot(L ? xDropNB : na, "x_dropNB", display = display.none)
+plot(L ? xDropND : na, "x_dropND", display = display.none)
+plot(L ? xDeepB : na, "x_deepB", display = display.none)
+plot(L ? xDeepBq : na, "x_deepBq", display = display.none)
+plot(L ? xDeepD : na, "x_deepD", display = display.none)
+plot(L ? xDeepNB : na, "x_deepNB", display = display.none)
+plot(L ? xDeepND : na, "x_deepND", display = display.none)
+plot(L ? xOkB : na, "x_okB", display = display.none)
+plot(L ? xEvB : na, "x_evB", display = display.none)
+plot(L ? xOkBq : na, "x_okBq", display = display.none)
+plot(L ? xEvBq : na, "x_evBq", display = display.none)
+plot(L ? xOkD : na, "x_okD", display = display.none)
+plot(L ? xEvD : na, "x_evD", display = display.none)
+plot(L ? majHitsG : na, "x_majHitsG", display = display.none)
+plot(L ? majHitsA : na, "x_majHitsA", display = display.none)
+plot(L ? majLows : na, "x_majLows", display = display.none)
+plot(L ? swHits : na, "x_swHits", display = display.none)
+plot(L ? swLows : na, "x_swLows", display = display.none)
