@@ -112,3 +112,40 @@ The saved v2.1 script was run on all 100 charts in TradingView, and its own sign
 Green signals catch sharp corrections in otherwise healthy markets. At deep bear-market bottoms (2009, 2022) the signal still fires on time, but it is graded grey, because every stock is far below its averages by then.
 
 **Tested and rejected:** letting a confirmed SPY bottom turn those grey signals green. It flags about 40% more major lows in green, but green failures rise on every set (unseen stocks: 21% → 28%), so it was not adopted. In a deep bear market, treat a grey BOTTOM? that comes right after SPY's own BOTTOM as the higher-quality grey.
+
+---
+
+## v2.4 fine-tuning on 200 more charts (Nov 8, 2026)
+
+**Data.** 200 new charts: 175 stocks across every sector (ACN … PSA, including RMD and CAH, which replaced the delisted HOLX and EXAS) plus 25 ETFs (VTI … JETS). None had been used before; they served as the tuning set. The earlier 148 stocks and 25 ETFs were reloaded as a **check set**. A change was kept only if it improved **both** sets.
+
+**v2.3 held up out of sample.** On the 175 new stocks, 17.8% of green BOTTOMs fell >20% afterwards, against 37.7% for grey and 36.1% for naive dip-buying.
+
+**What was tested**
+
+| Tested | Result |
+|---|---|
+| Grade thresholds (81 combinations of prior strength, relative-strength limit, 40-week-average distance, quick-flush window) | Already near the best. No change. |
+| Engine settings (zones, arm window, chase, cool-down, DIP filters) | Only trade-offs, nothing that was simply better. No change. |
+| Peak score ≥ 65, RSI low ≤ 34, lenient "4 of 5 checks" | Helped the tuning set but not the check set (overfit). Rejected. |
+| **BOTTOM: drop from the 52-week high under 27%** | Improved both sets. **Adopted.** |
+| **DIP: no more than 50% above the 200-week average, and pullback under 18%** | Improved both sets strongly. **Adopted.** |
+| **Yearly volatility under 40% to qualify for green** | Very volatile stocks had almost no edge: green BOTTOMs fell >20% 46% of the time. **Adopted.** |
+
+**Results (323 stocks, both sets combined)**
+
+| Green signals | v2.3 | v2.4 |
+|---|---|---|
+| BOTTOM: fell >20% after | 18.9% | **15.5%** |
+| BOTTOM: distance from true low | 16.6% | **15.0%** |
+| BOTTOM: higher 26 weeks later | 68% | **70%** |
+| DIP: fell >20% after | 21.5% | **14.6%** |
+| DIP: distance from true low | 15.6% | **12.3%** |
+| Grey BOTTOM? / naive dip-buying: fell >20% after | 39% / 38% | 38% / 38% |
+| Major lows flagged green (green + grey) | 538 (2,006) of 3,520 | 375 (2,006) of 3,520 |
+
+On the 50 ETFs, green BOTTOMs fell >20% after 7.5% of the time (v2.3: 9.9%) and green DIPs 13.3% (v2.3: 15.5%).
+
+**Verified on TradingView.** The saved v2.4 script matched the test logic on 563 of 564 signals across 30 charts.
+
+**Takeaway.** Green signals are fewer but cleaner. On very volatile stocks (40%+ a year) the indicator now says "?", because the backtest found no reliable edge there.

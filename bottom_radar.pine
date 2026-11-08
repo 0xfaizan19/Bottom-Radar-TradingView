@@ -1,6 +1,6 @@
 //@version=6
 // ╔════════════════════════════════════════════════════════════════════════╗
-// ║  BOTTOM RADAR v2.3 · Weekly capitulation & reversal finder             ║
+// ║  BOTTOM RADAR v2.4 · Weekly capitulation & reversal finder             ║
 // ║  Stage 1  ZONE     composite capitulation score (0-100) crosses a line ║
 // ║  Stage 2  CONFIRM  reversal week / RSI hook prints BOTTOM or DIP       ║
 // ║  Grade    green = market + stock context OK, grey "?" = risky context  ║
@@ -54,6 +54,10 @@ float  priorMin = input.float(75.0, "Prior strength: 52w high ≥ % of all-time 
 int    quickMax = input.int(10, "Quick flush: signal ≤ N weeks after the zone opened", minval = 2, maxval = 52, group = G5, display = display.none)
 float  relMax   = input.float(15.0, "Max lag vs market over 13 weeks (%)", minval = 1, group = G5, display = display.none, tooltip = "v2.1: stocks that fell this much more than the market over 13 weeks (stock-specific selling) kept falling. Applies to BOTTOM and DIP.")
 float  maMax    = input.float(20.0, "BOTTOM: max % below the 40-week average", minval = 1, group = G5, display = display.none, tooltip = "v2.1: BOTTOMs printed more than this far under the 40-week average kept falling twice as often.")
+float  bDDmax   = input.float(27.0, "BOTTOM: max drop from the 52-week high (%)", minval = 5, group = G5, display = display.none, tooltip = "v2.4 (200-chart test): BOTTOMs after deeper drops kept falling more often.")
+float  dDDmax   = input.float(18.0, "DIP: max pullback from the 52-week high (%)", minval = 5, group = G5, display = display.none, tooltip = "v2.4: deeper dips behaved like the start of bear markets.")
+float  extMax   = input.float(50.0, "DIP: max % above the 200-week average", minval = 5, group = G5, display = display.none, tooltip = "v2.4: dips in stocks that had run far above their 200-week average (parabolic) failed about twice as often.")
+float  volMax   = input.float(40.0, "Max yearly volatility for green (%)", minval = 5, group = G5, display = display.none, tooltip = "v2.4: on stocks swinging more than this a year, even green signals failed about 45% of the time, so they print grey.")
 
 string G2 = "③ Evidence"
 int rsiLen   = input.int(14, "RSI length", minval = 2, group = G2, display = display.none)
@@ -305,6 +309,11 @@ float lo9    = ta.lowest(low, 9)
 bool  warnX  = ta.crossover(score, warnTh)
 bool  dipOK  = close / athAll - 1.0 >= -dipAth / 100.0 and (na(maT) or close / maT - 1.0 >= -dipMa * sigma)
 bool  maOK   = na(maT) or close / maT - 1.0 >= -maMax / 100.0
+float ma200  = ta.sma(close, 200)
+bool  ddOKB  = -dd < bDDmax / 100.0
+bool  ddOKD  = -dd < dDDmax / 100.0
+bool  extOK  = na(ma200) or close / ma200 - 1.0 <= extMax / 100.0
+bool  volOK  = sigma < volMax / 100.0
 
 // ───────────────────────────── STATE ─────────────────────────────
 var int   armTier     = 0
@@ -359,7 +368,9 @@ bool setupOK = armTier != 0 and trig and chaseOK and coolOK and (armTier == 1 or
 bool fire    = setupOK and closed
 bool pend    = setupOK and not closed
 bool quick   = not na(armStart) and bar_index - armStart <= quickMax
-bool hiConf  = not useGrade or (armTier == 1 ? (mktOK and strong and quick and relOK and maOK) : (mktOK and relOK))
+bool gB      = mktOK and strong and quick and relOK and maOK and ddOKB and volOK
+bool gD      = mktOK and relOK and extOK and ddOKD and volOK
+bool hiConf  = not useGrade or (armTier == 1 ? gB : gD)
 // class: 1 BOTTOM · 3 BOTTOM? · 2 DIP · 4 DIP?
 int  sigCls  = armTier == 1 ? (hiConf ? 1 : 3) : (hiConf ? 2 : 4)
 bool sigBot  = fire and sigCls == 1
@@ -412,7 +423,7 @@ if fire
     array.push(sigBars, bar_index)
     array.push(sigClsA, sigCls)
     array.push(sigHit, false)
-    string why = (mktOK ? "" : "\n• market in a downtrend") + (isBot and not strong ? "\n• stock far below its old highs" : "") + (isBot and not quick ? "\n• slow, grinding decline" : "") + (relOK ? "" : "\n• falling much harder than the market") + (isBot and not maOK ? "\n• price far under its 40-week average" : "")
+    string why = (mktOK ? "" : "\n• market in a downtrend") + (isBot and not strong ? "\n• stock far below its old highs" : "") + (isBot and not quick ? "\n• slow, grinding decline" : "") + (relOK ? "" : "\n• falling much harder than the market") + (isBot and not maOK ? "\n• price far under its 40-week average" : "") + (isBot and not ddOKB ? "\n• drop from the 52-week high deeper than " + str.tostring(bDDmax, "#") + "%" : "") + (not isBot and not ddOKD ? "\n• pullback deeper than " + str.tostring(dDDmax, "#") + "%" : "") + (not isBot and not extOK ? "\n• stock far above its 200-week average (over-extended)" : "") + (volOK ? "" : "\n• very volatile stock (" + str.tostring(sigma * 100.0, "#") + "% a year): bottoms unreliable")
     string tip = (isBot ? "BOTTOM" : "DIP") + (risky ? "? · risky context" + why : " · context OK") + "\nPeak score: " + str.tostring(peakScore, "#") + "\nEntry (weekly close): " + str.tostring(close, format.mintick) + "\nInvalidation (zone low): " + str.tostring(setupLow, format.mintick) + "\nRisk to invalidation: " + str.tostring((close / setupLow - 1.0) * 100.0, "0.0") + "%"
     bool show = sigCls == 1 ? showMajor : sigCls == 3 ? showMajQ : sigCls == 2 ? showDip : showDipQ
     if show and labelMode == "Below candles"
@@ -642,10 +653,10 @@ if barstate.islast
     xDeepND := deepRate(nvD.drop)
 
     table.clear(tb, 0, 0, 7, 13)
-    tcell(0, 0, "◎ BOTTOM RADAR v2.3", color.white, HEAD, text.align_left, "Weekly capitulation & reversal finder. Signals print only on closed weekly bars.")
+    tcell(0, 0, "◎ BOTTOM RADAR v2.4", color.white, HEAD, text.align_left, "Weekly capitulation & reversal finder. Signals print only on closed weekly bars.")
     tcell(1, 0, syminfo.ticker + " · " + timeframe.period + (timeframe.isweekly ? "" : "  ⚠ built for 1W"), DIM, HEAD, text.align_right, "Current bar closes " + str.format_time(time_close, "EEE yyyy-MM-dd HH:mm", syminfo.timezone))
     table.merge_cells(tb, 1, 0, 7, 0)
-    string gradeNow = useGrade ? ((armTier == 1 ? (mktOK and strong and quick and relOK and maOK) : (mktOK and relOK)) ? "would be green" : "would be grey ?") : ""
+    string gradeNow = useGrade ? ((armTier == 1 ? gB : gD) ? "would be green" : "would be grey ?") : ""
     string stTxt = "No bottom setup"
     color  stCol = DIM
     if pend
@@ -670,7 +681,8 @@ if barstate.islast
     table.merge_cells(tb, 2, 1, 7, 1)
     int r = 2
     if showEvid
-        string ctxTxt = (mktOK ? "mkt✓" : "mkt✗") + " " + (relOK ? "rs✓" : "rs✗") + " " + (strong ? "hi✓" : "hi✗") + " " + (maOK ? "ma✓" : "ma✗")
+        string fails  = (mktOK ? "" : " mkt") + (relOK ? "" : " rs") + (strong ? "" : " hi") + (maOK ? "" : " ma") + (ddOKB ? "" : " dd") + (volOK ? "" : " vol")
+        string ctxTxt = fails == "" ? "all ✓" : "✗" + fails
         tcell(0, r, "Evidence", DIM, SECT, text.align_left, "Six capitulation signs (brighter = stronger) plus the context that grades a signal.")
         tcell(1, r, "RSI", DIM, SECT, text.align_center, "Weekly RSI. Full credit at 25, none above 45.")
         tcell(2, r, "Fear", DIM, SECT, text.align_center, "Williams VIX Fix against its upper band: a fear spike measured from price alone.")
@@ -678,7 +690,7 @@ if barstate.islast
         tcell(4, r, "Drawdown", DIM, SECT, text.align_center, "Fall from the 52-week high, scaled by this chart's yearly volatility (" + str.tostring(sigma * 100.0, "#") + "%).")
         tcell(5, r, "Volume", DIM, SECT, text.align_center, "Biggest weekly volume of the last 3 weeks vs the 26-week average.")
         tcell(6, r, "Exhaust.", DIM, SECT, text.align_center, "Consecutive weekly closes below the close 4 weeks earlier. 9+ = full credit.")
-        tcell(7, r, "Context", DIM, SECT, text.align_center, "mkt = market index not in a downtrend (or it just confirmed its own bottom). rs = not lagging the market by more than " + str.tostring(relMax, "#") + "% over 13 weeks. hi = 52-week high within " + str.tostring(100 - priorMin, "#") + "% of the all-time high. ma = price within " + str.tostring(maMax, "#") + "% of the 40-week average.")
+        tcell(7, r, "Context", DIM, SECT, text.align_center, "mkt = market index not in a downtrend (or it just confirmed its own bottom). rs = not lagging the market by more than " + str.tostring(relMax, "#") + "% over 13 weeks. hi = 52-week high within " + str.tostring(100 - priorMin, "#") + "% of the all-time high. ma = price within " + str.tostring(maMax, "#") + "% of the 40-week average. dd = drop from the 52-week high under " + str.tostring(bDDmax, "#") + "%. vol = yearly volatility under " + str.tostring(volMax, "#") + "% (now " + str.tostring(sigma * 100.0, "#") + "%). Shows the BOTTOM checks that currently fail.")
         tcell(0, r + 1, "Now", TXT, color(na), text.align_left, "")
         tcell(1, r + 1, str.tostring(rsi, "#"), color.white, heat(sRsi), text.align_center, "")
         tcell(2, r + 1, str.tostring(fearR, "0.00") + "×", color.white, heat(sFear), text.align_center, "")
@@ -686,7 +698,7 @@ if barstate.islast
         tcell(4, r + 1, str.tostring(dd * 100.0, "#") + "%", color.white, heat(sDd), text.align_center, "")
         tcell(5, r + 1, hasVol ? str.tostring(vrMax, "0.0") + "×" : "n/a", color.white, heat(sVol), text.align_center, "")
         tcell(6, r + 1, str.tostring(exh), color.white, heat(sExh), text.align_center, "")
-        tcell(7, r + 1, ctxTxt, color.white, mktOK and strong and relOK and maOK ? color.new(GOOD, 55) : color.new(BAD, 55), text.align_center, "")
+        tcell(7, r + 1, ctxTxt, color.white, fails == "" ? color.new(GOOD, 55) : color.new(BAD, 55), text.align_center, "")
         r += 2
     if showStats
         tcell(0, r, "Backtest · this chart", DIM, SECT, text.align_left, "Every signal on the loaded history, scored after the fact. Green = better than the naive dip-buy baseline, red = worse.")

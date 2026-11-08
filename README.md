@@ -1,6 +1,6 @@
 # Bottom Radar TradingView
 
-A weekly-chart TradingView indicator (Pine Script v6) that spots **capitulation bottoms** and **buy-the-dip lows**. It waits for the price to actually turn up, then **grades each signal** green (good conditions) or grey "?" (risky), based on what a backtest of 170 charts showed.
+A weekly-chart TradingView indicator (Pine Script v6, **v2.4**) that spots **capitulation bottoms** and **buy-the-dip lows**. It waits for the price to actually turn up, then **grades each signal** green (good conditions) or grey "?" (risky), based on a backtest of **370+ charts**.
 
 ![Bottom Radar on Applied Materials, weekly](docs/img/01-overview-amat.png)
 *Every element on one chart (AMAT weekly): blue DIPs, green BOTTOMs at the 2020 and 2025 lows, grey BOTTOM? signals in 2018 and 2022, zone shading, dots, dashed invalidation lines, and the score pane.*
@@ -44,7 +44,9 @@ A **green BOTTOM** needs all five checks to pass. The table's *Context* cell sho
 | Price is within 20% of the 40-week average | `ma` | Signals far below the average kept falling |
 | Signal comes within 10 weeks of the zone opening | — | Real capitulation reverses fast |
 
-A **green DIP** needs the market and relative-strength checks. Anything that fails a check prints **grey with "?"**. Hover the label to see which checks failed:
+v2.4 adds three more checks from a 200-chart fine-tuning run (`dd`, `vol`): a green BOTTOM also needs the drop from the 52-week high to be **under 27%**, and every green signal needs the stock's yearly volatility to be **under 40%**, because very volatile stocks showed no reliable edge.
+
+A **green DIP** needs the market and relative-strength checks, a pullback **under 18%**, the price no more than **50% above its 200-week average** (no parabolic stocks) and volatility under 40%. Anything that fails a check prints **grey with "?"**. Hover the label to see which checks failed:
 
 | Green: context OK | Grey: risky context |
 |---|---|
@@ -75,6 +77,15 @@ The rules were designed on 50 charts, checked on 20 held-back stocks, then teste
 | 15 ETFs: green **BOTTOM** | 89 | **9%** | **14%** | 81% |
 
 **Trade-off:** green signals are rare (about 13% of major lows on stocks; green plus grey together cover about 58%). At deep bear-market bottoms (2009, 2022) the signal still fires on time, but it is usually graded grey.
+
+### v2.4 fine-tuning (323 stocks, 50 ETFs)
+| Green signals | v2.3 | v2.4 |
+|---|---|---|
+| BOTTOM: fell >20% after | 18.9% | **15.5%** |
+| DIP: fell >20% after | 21.5% | **14.6%** |
+| ETF BOTTOM: fell >20% after | 9.9% | **7.5%** |
+
+Grey signals and naive dip-buying both sit at about 38%. See the [report](BACKTEST_REPORT.md).
 
 ## Install
 1. In TradingView, open **Pine Editor** → **Create new → Indicator**.
